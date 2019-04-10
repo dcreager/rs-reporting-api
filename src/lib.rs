@@ -13,6 +13,12 @@
 // limitations under the License.
 // ------------------------------------------------------------------------------------------------
 
+//! This crate provides some useful Rust code for working with the [Reporting API][reporting] and
+//! [Network Error Logging][nel] W3C draft specifications.
+//!
+//! [reporting]: https://w3c.github.io/reporting/
+//! [nel]: https://w3c.github.io/network-error-logging/
+
 use std::time::Duration;
 
 use serde::Deserialize;
