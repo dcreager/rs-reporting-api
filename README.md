@@ -4,11 +4,11 @@
 [![Latest Version](https://img.shields.io/crates/v/reporting-api.svg)](https://crates.io/crates/reporting-api)
 [![Rust Documentation](https://img.shields.io/badge/api-rustdoc-blue.svg)](https://docs.rs/reporting-api)
 
-This crate provides some useful Rust code for working with the [Reporting
-API][reporting] and [Network Error Logging][nel] W3C draft specifications.
+This crate provides some useful Rust code for working with the [Reporting API][]
+and [Network Error Logging][] W3C draft specifications.
 
-[reporting]: https://w3c.github.io/reporting/
-[nel]: https://w3c.github.io/network-error-logging/
+[Reporting API]: https://w3c.github.io/reporting/
+[Network Error Logging]: https://w3c.github.io/network-error-logging/
 
 ``` toml
 [dependencies]
