@@ -1,6 +1,6 @@
 [package]
 name = "reporting-api"
-version = "0.2.0"
+version = "0.3.0"
 description = "Reporting API and Network Error Logging"
 authors = ["Douglas Creager <dcreager@dcreager.net>"]
 license = "Apache-2.0"
