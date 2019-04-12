@@ -58,31 +58,47 @@
 //! that you've received:
 //!
 //! ```
-//! # use reporting_api::Report;
+//! # use reporting_api::BareReport;
 //! # let payload = r#"[{"age":500,"type":"network-error","url":"https://example.com/about/","user_agent":"Mozilla/5.0","body":{"referrer":"https://example.com/","sampling_fraction":0.5,"server_ip":"203.0.113.75","protocol":"h2","method":"POST","status_code":200,"elapsed_time":45,"phase":"application","type":"ok"}}]"#;
-//! let reports: Vec<Report> = serde_json::from_str(payload).unwrap();
+//! let reports: Vec<BareReport> = serde_json::from_str(payload).unwrap();
 //! ```
 //!
 //! That's it!  The elements of the vector will represent each of the reports in this upload batch.
-//! Each [`Report`][] instance will contain the fields defined by the [Reporting API][] for all
-//! report types, and also a [`body`][] containing the fields specific to that type of report.  You
-//! can use the [`body`][]'s [`is`][] and [`downcast_ref`][] methods if you know which particular
-//! kind of report you want to process.  For instance, if you know you only care about [Network
-//! Error Logging][] reports:
+//! Each one is a "bare" report, which means that we haven't tried to figure out what type of
+//! report this is, or which Rust type corresponds with that report type.  Instead, the raw body of
+//! the report is available (in the [`body`][] field) as a `serde_json` [`Value`][].
+//!
+//! If you know which particular kind of report you want to process, you can use the bare report's
+//! [`parse`][] method to convert it into a "parsed" report.  For instance, if you know you only
+//! care about [Network Error Logging][] reports:
 //!
 //! ```
+//! # use reporting_api::BareReport;
 //! # use reporting_api::Report;
-//! # use reporting_api::NELReport;
+//! # use reporting_api::NEL;
 //! # let payload = r#"[{"age":500,"type":"network-error","url":"https://example.com/about/","user_agent":"Mozilla/5.0","body":{"referrer":"https://example.com/","sampling_fraction":0.5,"server_ip":"203.0.113.75","protocol":"h2","method":"POST","status_code":200,"elapsed_time":45,"phase":"application","type":"ok"}}]"#;
-//! # let reports: Vec<Report> = serde_json::from_str(payload).unwrap();
-//! // Will be an Iterator<Item = &NELReport>
-//! let nel_content = reports.iter().filter_map(|report| report.body.downcast_ref::<NELReport>());
+//! # let reports: Vec<BareReport> = serde_json::from_str(payload).unwrap();
+//! // Ignore both kinds of failure, returning a Vec<Report<NEL>>.
+//! let nel_reports = reports
+//!     .into_iter()
+//!     .filter_map(BareReport::parse::<NEL>)
+//!     .filter_map(Result::ok)
+//!     .collect::<Vec<Report<NEL>>>();
 //! ```
 //!
-//! [`Report`]: struct.Report.html
-//! [`body`]: struct.Report.html#structfield.body
-//! [`is`]: struct.ReportBody.html#method.is
-//! [`downcast_ref`]: struct.ReportBody.html#method.downcast_ref
+//! [`BareReport`]: struct.BareReport.html
+//! [`body`]: struct.BareReport.html#structfield.body
+//! [`Value`]: https://docs.rs/serde_json/*/serde_json/value/enum.Value.html
+//! [`parse`]: struct.BareReport.html#method.parse
+//!
+//! Note that [`parse`][]'s return value is wrapped in _both_ [`Option`][] _and_ [`Result`][].  The
+//! outer [`Option`][] tells you whether or not the report is of the expected type.  If it is, the
+//! inner [`Result`][] tells you whether we were able to parse the reports `body` field according
+//! to that type's expected schema.  In this example, we therefore need two `filter_map` calls to
+//! strip away any mismatches and errors, leaving us with a vector of `Report<NEL>` instances.
+//!
+//! [`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
+//! [`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
 //!
 //! # Creating a new report type
 //!
@@ -104,8 +120,8 @@
 //! ```
 //! # use serde::Deserialize;
 //! # use serde::Serialize;
-//! #[derive(Debug, Deserialize, PartialEq, Serialize)]
-//! pub struct LintReport {
+//! #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+//! pub struct Lint {
 //!     pub source_file: String,
 //!     pub line: u32,
 //!     pub column: u32,
@@ -113,57 +129,33 @@
 //! }
 //! ```
 //!
-//! Note that you need to derive a couple of traits, and your type must be `'static` (i.e., it
-//! cannot contain any references).
+//! Lastly, you must implement the [`ReportType`][] trait for your new type, which defines the
+//! value of the `type` field in the report payload that corresponds to this new report type.
 //!
-//! Lastly, you must implement the [`ReportPayload`][] trait for your new type.  Every impl of this
-//! trait looks exactly the same; you can copy-paste the following, replacing only the type name
-//! (`LintReport`) and the value of the `name` parameter in the annotation (`lint`).  (This is the
-//! value of the `type` field in the report payload that corresponds to this new report type.)
-//!
-//! [`ReportPayload`]: trait.ReportPayload.html
+//! [`ReportType`]: trait.ReportType.html
 //!
 //! ```
-//! # use std::any::Any;
-//! # use std::fmt::Debug;
-//! # use reporting_api::ReportPayload;
-//! # use serde::Deserialize;
-//! # use serde::Serialize;
-//! # #[derive(Debug, Deserialize, PartialEq, Serialize)]
-//! # pub struct LintReport;
-//! #[typetag::serde(name = "lint")]
-//! impl ReportPayload for LintReport {
-//!     fn as_any(&self) -> &dyn Any {
-//!         self
-//!     }
-//!
-//!     fn as_debug(&self) -> &dyn Debug {
-//!         self
-//!     }
-//!
-//!     fn eq_payload(&self, other: &dyn ReportPayload) -> bool {
-//!         other
-//!             .as_any()
-//!             .downcast_ref::<Self>()
-//!             .map_or(false, |other| self == other)
+//! # use reporting_api::ReportType;
+//! # pub struct Lint;
+//! impl ReportType for Lint {
+//!     fn report_type() -> &'static str {
+//!         "lint"
 //!     }
 //! }
 //! ```
 //!
-//! And that's it!  The `typetag::serde` annotation is the magic that ties everything together; it
-//! automatically causes our deserialization logic to look for this type name when deserializing,
-//! and delegate to your new type to deserialize the contents of the `body` field.
+//! And that's it!  The [`parse`][] method will now work with your new report type.
 
-use std::any::Any;
-use std::fmt::Debug;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde::Serialize;
+use serde_json::Value;
 
-/// Represents a single report uploaded via the Reporting API.
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub struct Report {
+/// Represents a single report uploaded via the Reporting API, whose body is still a JSON object
+/// and has not yet been parsed into a more specific Rust type.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct BareReport {
     /// The amount of time between when the report was generated by the user agent and when it was
     /// uploaded.
     #[serde(with = "parse_milliseconds")]
@@ -172,68 +164,66 @@ pub struct Report {
     pub url: String,
     /// The value of the `User-Agent` header of the request that this report describes.
     pub user_agent: String,
+    /// The type of report
+    #[serde(rename = "type")]
+    pub report_type: String,
+    /// The body of the report, still encoded as a JSON object.
+    pub body: Value,
+}
+
+impl BareReport {
+    /// Verifies that a bare report has a particular type, and tries to parse the report body using
+    /// the corresponding Rust type.  Returns `Some(Ok(...))` if everything goes well.  Returns
+    /// `None` if the report has a different type, and `Some(Err(...))` if the report has the right
+    /// type but we can't parse the report body using that type's schema.
+    pub fn parse<C>(self) -> Option<Result<Report<C>, serde_json::Error>>
+    where
+        C: ReportType + for<'de> Deserialize<'de>,
+    {
+        if self.report_type != C::report_type() {
+            return None;
+        }
+        Some(self.parse_body())
+    }
+
+    fn parse_body<C>(self) -> Result<Report<C>, serde_json::Error>
+    where
+        C: for<'de> Deserialize<'de>,
+    {
+        Ok(Report {
+            age: self.age,
+            url: self.url,
+            user_agent: self.user_agent,
+            body: serde_json::from_value(self.body)?,
+        })
+    }
+}
+
+/// Represents a single report, after having parsed the body into the Rust type specific to this
+/// type of report.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Report<C> {
+    /// The amount of time between when the report was generated by the user agent and when it was
+    /// uploaded.
+    pub age: Duration,
+    /// The URL of the request that this report describes.
+    pub url: String,
+    /// The value of the `User-Agent` header of the request that this report describes.
+    pub user_agent: String,
     /// The body of the report.
-    #[serde(flatten)]
-    pub body: ReportBody,
+    pub body: C,
 }
 
-/// Contains the body of a single report.  The actual content for each kind of report is stored in
-/// its own Rust type, which must implement the [`ReportPayload`][] trait.
-///
-/// [`ReportPayload`]: trait.ReportPayload.html
-#[derive(Deserialize, Serialize)]
-pub struct ReportBody(Box<dyn ReportPayload>);
-
-impl ReportBody {
-    /// Create a new report body containing the given payload content.
-    pub fn new<P: ReportPayload>(payload: P) -> ReportBody {
-        ReportBody(Box::new(payload))
-    }
-
-    /// Returns whether the content of this report body has a given type.
-    pub fn is<P: ReportPayload>(&self) -> bool {
-        self.0.as_any().is::<P>()
-    }
-
-    /// Returns a reference to the body content if it's of type `P`, or `None` if it isn't.
-    pub fn downcast_ref<P: ReportPayload>(&self) -> Option<&P> {
-        self.0.as_any().downcast_ref::<P>()
-    }
+/// A trait that maps each Rust report type to the corresponding `type` value that appears in a
+/// JSON report payload.
+pub trait ReportType {
+    /// The value of the report's `type` field for reports of this type.
+    fn report_type() -> &'static str;
 }
 
-impl Debug for ReportBody {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        self.0.as_debug().fmt(f)
-    }
-}
-
-impl PartialEq for ReportBody {
-    fn eq(&self, other: &ReportBody) -> bool {
-        self.0.eq_payload(other.0.as_ref())
-    }
-}
-
-/// Each kind of report that can be delivered via the Reporting API will have its own type, which
-/// implements this trait.  Each type that implements this trait must also implement
-/// [`std::any::Any`][Any], [`std::fmt::Debug`][Debug], and [`std::cmp::PartialEq`][PartialEq].
-///
-/// [Any]: https://doc.rust-lang.org/std/any/trait.Any.html
-/// [Debug]: https://doc.rust-lang.org/std/fmt/trait.Debug.html
-/// [PartialEq]: https://doc.rust-lang.org/std/cmp/trait.PartialEq.html
-#[typetag::serde(tag = "type", content = "body")]
-pub trait ReportPayload: 'static {
-    /// Returns a reference to this payload as a `std::any::Any`.
-    fn as_any(&self) -> &dyn Any;
-    /// Returns a reference to this payload as a `std::fmt::Debug`.
-    fn as_debug(&self) -> &dyn Debug;
-    /// Compares this payload with another of an arbitrary type, returning `false` if the two
-    /// payloads have different types.
-    fn eq_payload(&self, other: &dyn ReportPayload) -> bool;
-}
-
-/// A single Network Error Logging report.
+/// The body of a single Network Error Logging report.
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub struct NELReport {
+pub struct NEL {
     /// The referrer information for the request, as determined by the referrer policy associated
     /// with its client.
     pub referrer: String,
@@ -263,21 +253,9 @@ pub struct NELReport {
     pub status: String,
 }
 
-#[typetag::serde(name = "network-error")]
-impl ReportPayload for NELReport {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_debug(&self) -> &dyn Debug {
-        self
-    }
-
-    fn eq_payload(&self, other: &dyn ReportPayload) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .map_or(false, |other| self == other)
+impl ReportType for NEL {
+    fn report_type() -> &'static str {
+        "network-error"
     }
 }
 
@@ -339,15 +317,26 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn cannot_parse_unknown_report_type() {
+    fn can_parse_unknown_report_type() {
         let report_json = json!({
             "age": 500,
-            "type": "unknown",
             "url": "https://example.com/about/",
             "user_agent": "Mozilla/5.0",
+            "type": "unknown",
             "body": {},
         });
-        assert!(serde_json::from_value::<Report>(report_json).is_err());
+        let report: BareReport =
+            serde_json::from_value(report_json).expect("Should be able to parse JSON report");
+        assert_eq!(
+            report,
+            BareReport {
+                age: Duration::from_millis(500),
+                url: "https://example.com/about/".to_string(),
+                user_agent: "Mozilla/5.0".to_string(),
+                report_type: "unknown".to_string(),
+                body: json!({}),
+            }
+        );
     }
 
     #[test]
@@ -358,7 +347,18 @@ mod tests {
             "user_agent": "Mozilla/5.0",
             "body": {},
         });
-        assert!(serde_json::from_value::<Report>(report_json).is_err());
+        assert!(serde_json::from_value::<BareReport>(report_json).is_err());
+    }
+
+    #[test]
+    fn cannot_parse_missing_body() {
+        let report_json = json!({
+            "age": 500,
+            "url": "https://example.com/about/",
+            "user_agent": "Mozilla/5.0",
+            "type": "unknown",
+        });
+        assert!(serde_json::from_value::<BareReport>(report_json).is_err());
     }
 
     #[test]
@@ -380,15 +380,19 @@ mod tests {
                 "type": "ok"
             }
         });
-        let report: Report =
+        let bare_report: BareReport =
             serde_json::from_value(report_json).expect("Should be able to parse JSON report");
+        let report: Report<NEL> = bare_report
+            .parse()
+            .expect("Report should be a NEL report")
+            .expect("Should be able to parse NEL report body");
         assert_eq!(
             report,
             Report {
                 age: Duration::from_millis(500),
                 url: "https://example.com/about/".to_string(),
                 user_agent: "Mozilla/5.0".to_string(),
-                body: ReportBody::new(NELReport {
+                body: NEL {
                     referrer: "https://example.com/".to_string(),
                     sampling_fraction: 0.5,
                     server_ip: "203.0.113.75".to_string(),
@@ -398,7 +402,7 @@ mod tests {
                     elapsed_time: Some(Duration::from_millis(45)),
                     phase: "application".to_string(),
                     status: "ok".to_string(),
-                }),
+                },
             }
         );
     }
