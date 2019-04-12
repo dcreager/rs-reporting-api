@@ -306,7 +306,7 @@ pub mod parse_opt_milliseconds {
     where
         D: Deserializer<'de>,
     {
-        Ok(Option::<u64>::deserialize(deserializer)?.map(|millis| Duration::from_millis(millis)))
+        Ok(Option::<u64>::deserialize(deserializer)?.map(Duration::from_millis))
     }
 }
 
