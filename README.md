@@ -12,7 +12,7 @@ and [Network Error Logging][] W3C draft specifications.
 
 ``` toml
 [dependencies]
-rs-reporting-api = "^0.2"
+reporting-api = "^0.2"
 ```
 
 # Overview
