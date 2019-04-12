@@ -56,26 +56,39 @@ To do that, you just need to use `serde_json` to deserialize the content of the
 JSON string that you've received:
 
 ``` rust
-let reports: Vec<Report> = serde_json::from_str(payload).unwrap();
+let reports: Vec<BareReport> = serde_json::from_str(payload).unwrap();
 ```
 
 That's it!  The elements of the vector will represent each of the reports in
-this upload batch.  Each [`Report`][] instance will contain the fields defined
-by the [Reporting API][] for all report types, and also a [`body`][] containing
-the fields specific to that type of report.  You can use the [`body`][]'s
-[`is`][] and [`downcast_ref`][] methods if you know which particular kind of
-report you want to process.  For instance, if you know you only care about
-[Network Error Logging][] reports:
+this upload batch.  Each one is a "bare" report, which means that we haven't
+tried to figure out what type of report this is, or which Rust type corresponds
+with that report type.  Instead, the raw body of the report is available (in the
+`body` field) as a `serde_json` [`Value`][].
+
+If you know which particular kind of report you want to process, you can use the
+bare report's `parse` method to convert it into a "parsed" report.  For
+instance, if you know you only care about [Network Error Logging][] reports:
 
 ``` rust
-// Will be an Iterator<Item = &NELReport>
-let nel_content = reports.iter().filter_map(|report| report.body.downcast_ref::<NELReport>());
+// Ignore both kinds of failure, returning a Vec<Report<NEL>>.
+let nel_reports = reports
+    .into_iter()
+    .filter_map(BareReport::parse::<NEL>)
+    .filter_map(Result::ok)
+    .collect::<Vec<Report<NEL>>>();
 ```
 
-[`Report`]: struct.Report.html
-[`body`]: struct.Report.html#structfield.body
-[`is`]: struct.ReportBody.html#method.is
-[`downcast_ref`]: struct.ReportBody.html#method.downcast_ref
+[`Value`]: https://docs.rs/serde_json/*/serde_json/value/enum.Value.html
+
+Note that `parse`'s return value is wrapped in _both_ [`Option`][] _and_
+[`Result`][].  The outer [`Option`][] tells you whether or not the report is of
+the expected type.  If it is, the inner [`Result`][] tells you whether we were
+able to parse the reports `body` field according to that type's expected schema.
+In this example, we therefore need two `filter_map` calls to strip away any
+mismatches and errors, leaving us with a vector of `Report<NEL>` instances.
+
+[`Option`]: https://doc.rust-lang.org/std/option/enum.Option.html
+[`Result`]: https://doc.rust-lang.org/std/result/enum.Result.html
 
 # Creating a new report type
 
@@ -95,8 +108,8 @@ there's a new `lint` report type whose body content looks like:
 First you'll define a Rust type to hold the body content:
 
 ``` rust
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-pub struct LintReport {
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct Lint {
     pub source_file: String,
     pub line: u32,
     pub column: u32,
@@ -104,38 +117,16 @@ pub struct LintReport {
 }
 ```
 
-Note that you need to derive a couple of traits, and your type must be `'static`
-(i.e., it cannot contain any references).
-
-Lastly, you must implement the [`ReportPayload`][] trait for your new type.
-Every impl of this trait looks exactly the same; you can copy-paste the
-following, replacing only the type name (`LintReport`) and the value of the
-`name` parameter in the annotation (`lint`).  (This is the value of the `type`
-field in the report payload that corresponds to this new report type.)
-
-[`ReportPayload`]: trait.ReportPayload.html
+Lastly, you must implement the `ReportType` trait for your new type, which
+defines the value of the `type` field in the report payload that corresponds to
+this new report type.
 
 ``` rust
-#[typetag::serde(name = "lint")]
-impl ReportPayload for LintReport {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn as_debug(&self) -> &dyn Debug {
-        self
-    }
-
-    fn eq_payload(&self, other: &dyn ReportPayload) -> bool {
-        other
-            .as_any()
-            .downcast_ref::<Self>()
-            .map_or(false, |other| self == other)
+impl ReportType for Lint {
+    fn report_type() -> &'static str {
+        "lint"
     }
 }
 ```
 
-And that's it!  The `typetag::serde` annotation is the magic that ties
-everything together; it automatically causes our deserialization logic to look
-for this type name when deserializing, and delegate to your new type to
-deserialize the contents of the `body` field.
+And that's it!  The `parse` method will now work with your new report type.
